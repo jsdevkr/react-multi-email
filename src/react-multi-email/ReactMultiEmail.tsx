@@ -1,11 +1,15 @@
 import * as React from 'react';
 import isEmailFn from './isEmail';
+import Spinner from '../components/Spinner';
 
 export interface IReactMultiEmailProps {
   emails?: string[];
   onChange?: (emails: string[]) => void;
+  enable?: ({ emailCnt }: { emailCnt: number }) => boolean;
+  onDisabled?: () => void; 
   noClass?: boolean;
-  validateEmail?: (email: string) => boolean;
+  validateEmail?: (email: string) => boolean | Promise<boolean>;
+  enableSpinner?: boolean;
   style?: object;
   getLabel: (
     email: string,
@@ -21,6 +25,7 @@ export interface IReactMultiEmailState {
   propsEmails?: string[];
   emails: string[];
   inputValue?: string;
+  spinning: boolean;
 }
 
 class ReactMultiEmail extends React.Component<
@@ -31,6 +36,7 @@ class ReactMultiEmail extends React.Component<
     focused: false,
     emails: [],
     inputValue: '',
+    spinning: false,
   };
 
   emailInputRef: React.RefObject<HTMLInputElement>;
@@ -57,7 +63,8 @@ class ReactMultiEmail extends React.Component<
   }
 
   findEmailAddress = (value: string, isEnter?: boolean) => {
-    const { validateEmail } = this.props;
+    const { enable, onDisabled, validateEmail } = this.props;
+
     let validEmails: string[] = [];
     let inputValue: string = '';
     const re = /[ ,;]/g;
@@ -79,28 +86,69 @@ class ReactMultiEmail extends React.Component<
         let splitData = value.split(re).filter(n => {
           return n !== '' && n !== undefined && n !== null;
         });
-        
+
         const setArr = new Set(splitData);
         let arr = [...setArr];
 
         do {
-          if (isEmail('' + arr[0])) {
-            addEmails('' + arr.shift());
-          } else {
-            if (arr.length === 1) {
-              /// 마지막 아이템이면 inputValue로 남겨두기
-              inputValue = '' + arr.shift();
+          const validateResult = isEmail('' + arr[0]);
+
+          if (typeof validateResult === 'boolean') {
+            if (validateResult === true) {
+              addEmails('' + arr.shift());
             } else {
-              arr.shift();
+              if (arr.length === 1) {
+                inputValue = '' + arr.shift();
+              } else {
+                arr.shift();
+              }
+            }
+          } else {
+            // handle promise
+            asyncFlag = true;
+            if (!enableSpinner || enableSpinner == true) {
+              this.setState({ spinning: true });
+            }
+
+            if ((await validateEmail!(value)) === true) {
+              addEmails('' + arr.shift());
+              this.setState({ spinning: false });
+            } else {
+              if (arr.length === 1) {
+                inputValue = '' + arr.shift();
+              } else {
+                arr.shift();
+              }
             }
           }
         } while (arr.length);
       } else {
+        if(enable && enable({ emailCnt: this.state.emails.length }) === false) {
+          onDisabled && onDisabled();
+          return;
+        }
+
         if (isEnter) {
-          if (isEmail(value)) {
-            addEmails(value);
+          const validateResult = isEmail(value);
+          if (typeof validateResult === 'boolean') {
+            if (validateResult === true) {
+              addEmails(value);
+            } else {
+              inputValue = value;
+            }
           } else {
-            inputValue = value;
+            // handle promise
+            asyncFlag = true;
+            if (!enableSpinner || enableSpinner == true) {
+              this.setState({ spinning: true });
+            }
+
+            if ((await validateEmail!(value)) === true) {
+              addEmails(value);
+              this.setState({ spinning: false });
+            } else {
+              inputValue = value;
+            }
           }
         } else {
           inputValue = value;
@@ -114,12 +162,16 @@ class ReactMultiEmail extends React.Component<
     });
 
     if (validEmails.length && this.props.onChange) {
-      this.props.onChange([...this.state.emails, ...validEmails]);
+      // In async, input email is merged.
+      if (asyncFlag) this.props.onChange([...this.state.emails]);
+      else {
+        this.props.onChange([...this.state.emails, ...validEmails]);
+      }
     }
   };
 
-  onChangeInputValue = (value: string) => {
-    this.findEmailAddress(value);
+  onChangeInputValue = async (value: string) => {
+    await this.findEmailAddress(value);
   };
 
   removeEmail = (index: number, isDisabled: boolean) => {
@@ -127,7 +179,7 @@ class ReactMultiEmail extends React.Component<
         return;
     }
     this.setState(
-      prevState => {
+      (prevState) => {
         return {
           emails: [
             ...prevState.emails.slice(0, index),
@@ -168,8 +220,8 @@ class ReactMultiEmail extends React.Component<
     }
   };
 
-  handleOnChange = (e: React.SyntheticEvent<HTMLInputElement>) =>
-    this.onChangeInputValue(e.currentTarget.value);
+  handleOnChange = async (e: React.SyntheticEvent<HTMLInputElement>) =>
+    await this.onChangeInputValue(e.currentTarget.value);
 
   handleOnBlur = (e: React.SyntheticEvent<HTMLInputElement>) => {
     this.setState({ focused: false });
@@ -182,10 +234,14 @@ class ReactMultiEmail extends React.Component<
     });
 
   render() {
-    const { focused, emails, inputValue } = this.state;
-    const { style, getLabel, className = '', noClass, placeholder } = this.props;
-
-    // removeEmail
+    const { focused, emails, inputValue, spinning } = this.state;
+    const {
+      style,
+      getLabel,
+      className = '',
+      noClass,
+      placeholder,
+    } = this.props;
 
     return (
       <div
@@ -199,11 +255,18 @@ class ReactMultiEmail extends React.Component<
           }
         }}
       >
+        {spinning && <Spinner />}
         {placeholder ? <span data-placeholder>{placeholder}</span> : null}
-        {emails.map((email: string, index: number) =>
-          getLabel(email, index, this.removeEmail),
-        )}
+        <div
+          className={'data-labels'}
+          style={{ opacity: spinning ? 0.45 : 1.0, display: 'inherit' }}
+        >
+          {emails.map((email: string, index: number) =>
+            getLabel(email, index, this.removeEmail),
+          )}
+        </div>
         <input
+          style={{ opacity: spinning ? 0.45 : 1.0 }}
           ref={this.emailInputRef}
           type="text"
           value={inputValue}
